@@ -40,12 +40,17 @@ def main(args):
     )
 
     jailbroken_results = []
-    for i, prompt in tqdm(enumerate(attack.prompts)):
+    pbar = tqdm(attack.prompts)
+    for prompt in pbar:
         output = defense(prompt)
         jb = defense.is_jailbroken(output)
         jailbroken_results.append(jb)
+        # show average jb percentage
+        pbar.set_postfix({
+            'JB percentage': np.mean(jailbroken_results) * 100
+        })
 
-    print(f'We made {num_errors} errors')
+    # print(f'We made {num_errors} errors')
 
     # Save results to a pandas DataFrame
     summary_df = pd.DataFrame.from_dict({

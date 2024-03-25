@@ -2,10 +2,12 @@ import json
 import pandas as pd
 
 class Prompt:
-    def __init__(self, full_prompt, perturbable_prompt, max_new_tokens):
+    def __init__(self, full_prompt, perturbable_prompt, max_new_tokens, start_noise_idx, end_noise_idx):
         self.full_prompt = full_prompt
         self.perturbable_prompt = perturbable_prompt
         self.max_new_tokens = max_new_tokens
+        self.start_noise_idx = start_noise_idx
+        self.end_noise_idx = end_noise_idx
 
     def perturb(self, perturbation_fn):
         perturbed_prompt = perturbation_fn(self.perturbable_prompt)
@@ -74,10 +76,23 @@ class GCG(Attack):
         end_index = full_prompt.find(control) + len(control)
         perturbable_prompt = full_prompt[start_index:end_index]
         
+        # TODO: check defense encoding and verify the indices
+        prefix = self.target_model.tokenizer(full_prompt[:start_index])
+        prefix_len = len(prefix.input_ids)
+        # prefix_len = len(prefix.input_ids) - 1  # -1 for the eos token
+        prefix_and_perturbable = self.target_model.tokenizer(full_prompt[:end_index])
+        prefix_and_perturbable_len = len(prefix_and_perturbable.input_ids)
+        # prefix_and_perturbable_len = len(prefix_and_perturbable.input_ids) - 1  # -1 for the eos token
+        
+        # print(f'start_noise_idx: {prefix_len}')
+        # print(f'end_noise_idx: {prefix_and_perturbable_len}')
+        
         return Prompt(
             full_prompt, 
             perturbable_prompt, 
-            max_new_tokens
+            max_new_tokens,
+            prefix_len,
+            prefix_and_perturbable_len
         )
 
 class PAIR(Attack):

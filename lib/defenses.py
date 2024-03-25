@@ -58,12 +58,13 @@ class SmoothLLM(Defense):
 
     @torch.no_grad()
     def __call__(self, prompt, batch_size=64, max_new_len=100):
-
         all_inputs = []
         for _ in range(self.num_copies):
             prompt_copy = copy.deepcopy(prompt)
             prompt_copy.perturb(self.perturbation_fn)
             all_inputs.append(prompt_copy.full_prompt)
+            print(f'*** original input ***: {prompt.full_prompt}')
+            # print(f'*** perturbed input ***: {prompt_copy.full_prompt}')
 
         # Iterate each batch of inputs
         all_outputs = []
@@ -71,11 +72,31 @@ class SmoothLLM(Defense):
 
             # Get the current batch of inputs
             batch = all_inputs[i * batch_size:(i+1) * batch_size]
+            
+            probs = self.target_model.get_probs(
+                batch, 
+                prompt.start_noise_idx,
+                prompt.end_noise_idx,
+            )
+            
+            neg_log_likelihood = -torch.log(probs)                   # negative log likelihood
+            noise_scale = torch.zeros_like(neg_log_likelihood, dtype=torch.float, device=self.target_model.model.device)
+            
+            noise_scale[:, prompt.start_noise_idx:prompt.end_noise_idx] = self.moving_average(
+                neg_log_likelihood[:, prompt.start_noise_idx:prompt.end_noise_idx],
+                [0.1,0.2,0.3,0.4-(1e-10),1e-10])
+            
+            noise_scale = torch.clamp(noise_scale/10, min=0, max=1)
+            # noise_scale = 0
+            print(f'*** noise_scale ***: {noise_scale}')
 
             # Run a forward pass through the LLM for each perturbed copy
             batch_outputs = self.target_model(
-                batch=batch, 
-                max_new_tokens=prompt.max_new_tokens
+                batch, 
+                prompt.start_noise_idx,
+                prompt.end_noise_idx,
+                noise_scale,
+                max_new_tokens=prompt.max_new_tokens,
             )
 
             all_outputs.extend(batch_outputs)
@@ -98,6 +119,23 @@ class SmoothLLM(Defense):
             if jb == smoothLLM_jb
         ]
         return random.choice(majority_outputs)
+    
+    
+    # TODO: this is only for one-dimensional sequence
+    def moving_average(self, seq, multiplier):
+        # print(f'*** seq.shape ***: {seq.shape}')
+        print(seq)
+        assert sum(multiplier) == 1
+        ret = torch.zeros_like(seq, dtype=torch.float)
+        for offset, k in enumerate(multiplier[::-1]):
+            shifted_seq = torch.roll(seq, offset, dims=-1)
+            shifted_seq[:, :offset] = 0
+            # print(f'*** shifted_seq ***: {shifted_seq}')
+            ret += k * shifted_seq
+        print(ret)
+        return ret
+            
+        
 
 
 
