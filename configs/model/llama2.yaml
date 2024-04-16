@@ -1,0 +1,3 @@
+model_path: meta-llama/Llama-2-7b-chat-hf
+tokenizer_path: meta-llama/Llama-2-7b-chat-hf
+conversation_template: llama2

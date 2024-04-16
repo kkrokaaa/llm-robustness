@@ -1,0 +1,8 @@
+smoothllm_num_copies: 10
+smoothllm_perturbation_rate: 10
+
+defaults:
+  - _self_
+  - model: llama2
+  - perturbation: RandomSwapPerturbation
+  - metric: rouge 
