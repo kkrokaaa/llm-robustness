@@ -4,6 +4,7 @@ import random
 import numpy as np
 
 import lib.perturbations as perturbations
+import lib.data_loading as data_loading
 
 class Defense:
 
@@ -63,8 +64,6 @@ class SmoothLLM(Defense):
             prompt_copy = copy.deepcopy(prompt)
             prompt_copy.perturb(self.perturbation_fn)
             all_inputs.append(prompt_copy.full_prompt)
-            print(f'*** original input ***: {prompt.full_prompt}')
-            # print(f'*** perturbed input ***: {prompt_copy.full_prompt}')
 
         # Iterate each batch of inputs
         all_outputs = []
@@ -87,8 +86,6 @@ class SmoothLLM(Defense):
                 [0.1,0.2,0.3,0.4-(1e-10),1e-10])
             
             noise_scale = torch.clamp(noise_scale/10, min=0, max=1)
-            # noise_scale = 0
-            print(f'*** noise_scale ***: {noise_scale}')
 
             # Run a forward pass through the LLM for each perturbed copy
             batch_outputs = self.target_model(
@@ -123,19 +120,200 @@ class SmoothLLM(Defense):
     
     # TODO: this is only for one-dimensional sequence
     def moving_average(self, seq, multiplier):
-        # print(f'*** seq.shape ***: {seq.shape}')
-        print(seq)
         assert sum(multiplier) == 1
         ret = torch.zeros_like(seq, dtype=torch.float)
         for offset, k in enumerate(multiplier[::-1]):
             shifted_seq = torch.roll(seq, offset, dims=-1)
             shifted_seq[:, :offset] = 0
-            # print(f'*** shifted_seq ***: {shifted_seq}')
             ret += k * shifted_seq
-        print(ret)
         return ret
-            
+
+
+
+class BatchSmoothLLM(Defense):
+    def __init__(self, target_model, pert_type, pert_pct, num_copies):
+        super(BatchSmoothLLM, self).__init__(target_model)
         
+        self.num_copies = num_copies
+        self.perturbation_fn = vars(perturbations)[pert_type](q=pert_pct)
+
+    @torch.no_grad()
+    def __call__(self, batch_prompt, batch_size=64, max_new_len=100):
+        # batch_prompt : list of <Prompt>s              
+        # batch_size : number of data fed in self.target_model at a time;   if batch_size does not divide (number of <Prompt>s in batch_prompt) * self.num_copies, perturbations from the same <Prompt> might be fed in different batch;    will be handled after the bottleneck
+        all_inputs = []
+        all_start_noise_idx = []
+        all_end_noise_idx = []
+        
+        for prompt in batch_prompt:
+            for _ in range(self.num_copies):
+                prompt_copy = copy.deepcopy(prompt)
+                prompt_copy.perturb(self.perturbation_fn)
+                all_inputs.append(prompt_copy.full_prompt)
+                all_start_noise_idx.append(prompt_copy.start_noise_idx)
+                all_end_noise_idx.append(prompt_copy.end_noise_idx)
+        # all_inputs = [prompt1 perturbation1, ..., prompt1 perturbation self.num_copies, prompt2 perturbation1, ... ]
+        # need to discriminate from which prompt the perturbations are made so that random.choice can be made
+        # 0.001sec
+
+        # Iterate each batch of inputs
+        all_outputs = []
+        for i in range(len(all_inputs) // batch_size + 1):
+            # Get the current batch of inputs
+            batch = all_inputs[i*batch_size : (i+1)*batch_size]
+            start_noise_idx_list = all_start_noise_idx[i*batch_size : (i+1)*batch_size]
+            end_noise_idx_list = all_end_noise_idx[i*batch_size : (i+1)*batch_size]
+           
+            probs = self.target_model.get_probs(
+                batch, 
+                start_noise_idx_list,
+                end_noise_idx_list)                                 # .get_probs does not use noise indices; batch could be consisted of perturbations from different prompts
+            
+            neg_log_likelihood = -torch.log(probs)                  # negative log likelihood : batch size x max sentence length of the batch
+            noise_scale = torch.zeros_like(neg_log_likelihood, dtype=torch.float, device=self.target_model.model.device)
+            
+            # each prompt might have different noise indices
+            for j in range(len(batch)):
+                noise_scale[j, start_noise_idx_list[j] : end_noise_idx_list[j]] = self.moving_average(
+                    neg_log_likelihood[j, start_noise_idx_list[j] : end_noise_idx_list[j]], [0.1,0.2,0.3,0.4-(1e-10),1e-10])
+            
+            noise_scale = torch.clamp(noise_scale/10, min=0, max=1)        
+            # 4.4 sec
+
+            # Run a forward pass through the LLM for each perturbed copy
+            batch_outputs = self.target_model(
+                batch, 
+                start_noise_idx_list,
+                end_noise_idx_list,
+                noise_scale,
+                max_new_tokens=prompt.max_new_tokens)               # bottleneck
+
+            all_outputs.extend(batch_outputs)
+            torch.cuda.empty_cache()
+            # 180 sec
+        
+        all_outputs = data_loading.divide_into_chunks(all_outputs, chunk_size = self.num_copies)    # list of lists of outputs from the same prompt
+        majority_output_list = []
+        
+        for outputs in all_outputs:                                                                 # outputs : outputs from a single prompt
+            # Check whether the outputs jailbreak the LLM
+            are_copies_jailbroken = [self.is_jailbroken(s) for s in outputs]
+            if len(are_copies_jailbroken) == 0:
+                raise ValueError("LLM did not generate any outputs.")
+
+            outputs_and_jbs = zip(outputs, are_copies_jailbroken)
+
+            # Determine whether SmoothLLM was jailbroken
+            jb_percentage = np.mean(are_copies_jailbroken)
+            smoothLLM_jb = True if jb_percentage > 0.5 else False
+
+            # Pick a response that is consistent with the majority vote
+            majority_outputs = [
+                output for (output, jb) in outputs_and_jbs 
+                if jb == smoothLLM_jb
+            ]
+            majority_output_list.append(random.choice(majority_outputs))
+        return majority_output_list                                 # list of strings
+    
+    
+    def moving_average(self, seq, multiplier):
+        # seq : 1 dim Tensor
+        assert sum(multiplier) == 1
+        ret = torch.zeros_like(seq, dtype=torch.float)
+        for offset, k in enumerate(multiplier[::-1]):
+            shifted_seq = torch.roll(seq, offset, dims=-1)
+            shifted_seq[:offset] = 0
+            ret += k * shifted_seq
+        return ret
+    
 
 
+class BatchSmoothLLMHydra(Defense):
+    def __init__(self, target_model, perturbation, num_copies):
+        super(BatchSmoothLLMHydra, self).__init__(target_model)
+        
+        self.num_copies = num_copies
+        self.perturbation_fn = perturbation
+
+    @torch.no_grad()
+    def __call__(self, batch_prompt, batch_size=64, max_new_len=100):
+        # batch_prompt : list of <Prompt>s              
+        # batch_size : number of data fed in self.target_model at a time;   if batch_size does not divide (number of <Prompt>s in batch_prompt) * self.num_copies, perturbations from the same <Prompt> might be fed in different batch;    will be handled after the bottleneck
+        all_inputs = []
+        all_start_noise_idx = []
+        all_end_noise_idx = []
+        
+        for prompt in batch_prompt:
+            for _ in range(self.num_copies):
+                prompt_copy = copy.deepcopy(prompt)
+                prompt_copy.perturb(self.perturbation_fn)
+                all_inputs.append(prompt_copy.full_prompt)
+                all_start_noise_idx.append(prompt_copy.start_noise_idx)
+                all_end_noise_idx.append(prompt_copy.end_noise_idx)
+        # all_inputs = [prompt1 perturbation1, ..., prompt1 perturbation self.num_copies, prompt2 perturbation1, ... ]
+        # need to discriminate from which prompt the perturbations are made so that random.choice can be made
+        # 0.001sec
+
+        # Iterate each batch of inputs
+        all_outputs = []
+        for i in range(len(all_inputs) // batch_size + 1):
+            # Get the current batch of inputs
+            batch = all_inputs[i*batch_size : (i+1)*batch_size]
+            start_noise_idx_list = all_start_noise_idx[i*batch_size : (i+1)*batch_size]
+            end_noise_idx_list = all_end_noise_idx[i*batch_size : (i+1)*batch_size]
+           
+            probs = self.target_model.get_probs(batch, start_noise_idx_list, end_noise_idx_list)                                                                               # .get_probs does not use noise indices; batch could be consisted of perturbations from different prompts
+            
+            neg_log_likelihood = -torch.log(probs)                  # negative log likelihood : batch size x max sentence length of the batch
+            noise_scale = torch.zeros_like(neg_log_likelihood, dtype=torch.float, device=self.target_model.model.device)
+            
+            # each prompt might have different noise indices
+            for j in range(len(batch)):
+                noise_scale[j, start_noise_idx_list[j] : end_noise_idx_list[j]] = self.moving_average(
+                    neg_log_likelihood[j, start_noise_idx_list[j] : end_noise_idx_list[j]], [0.1,0.2,0.3,0.4-(1e-10),1e-10])
+            
+            noise_scale = torch.clamp(noise_scale/10, min=0, max=1)        
+            # 4.4 sec
+
+            # Run a forward pass through the LLM for each perturbed copy
+            batch_outputs = self.target_model(batch, start_noise_idx_list, end_noise_idx_list, noise_scale, 
+                                              max_new_tokens=prompt.max_new_tokens)                 # bottleneck
+
+            all_outputs.extend(batch_outputs)
+            torch.cuda.empty_cache()
+            # 180 sec
+        
+        all_outputs = data_loading.divide_into_chunks(all_outputs, chunk_size = self.num_copies)    # list of lists of outputs from the same prompt
+        majority_output_list = []
+        
+        for outputs in all_outputs:                                 # outputs : outputs from a single prompt
+            # Check whether the outputs jailbreak the LLM
+            are_copies_jailbroken = [self.is_jailbroken(s) for s in outputs]
+            if len(are_copies_jailbroken) == 0:
+                raise ValueError("LLM did not generate any outputs.")
+
+            outputs_and_jbs = zip(outputs, are_copies_jailbroken)
+
+            # Determine whether SmoothLLM was jailbroken
+            jb_percentage = np.mean(are_copies_jailbroken)
+            smoothLLM_jb = True if jb_percentage > 0.5 else False
+
+            # Pick a response that is consistent with the majority vote
+            majority_outputs = [
+                output for (output, jb) in outputs_and_jbs 
+                if jb == smoothLLM_jb
+            ]
+            majority_output_list.append(random.choice(majority_outputs))
+        return majority_output_list                                 # list of strings
+    
+    
+    def moving_average(self, seq, multiplier):
+        # seq : 1 dim Tensor
+        assert sum(multiplier) == 1
+        ret = torch.zeros_like(seq, dtype=torch.float)
+        for offset, k in enumerate(multiplier[::-1]):
+            shifted_seq = torch.roll(seq, offset, dims=-1)
+            shifted_seq[:offset] = 0
+            ret += k * shifted_seq
+        return ret
 
