@@ -4,7 +4,7 @@ import random
 import numpy as np
 
 import lib.perturbations as perturbations
-import lib.data_loading as data_loading
+import lib.prompt_object_generator as prompt_object_generator
 
 class Defense:
 
@@ -192,7 +192,7 @@ class BatchSmoothLLM(Defense):
             torch.cuda.empty_cache()
             # 180 sec
         
-        all_outputs = data_loading.divide_into_chunks(all_outputs, chunk_size = self.num_copies)    # list of lists of outputs from the same prompt
+        all_outputs = prompt_object_generator.divide_into_chunks(all_outputs, chunk_size = self.num_copies)    # list of lists of outputs from the same prompt
         majority_output_list = []
         
         for outputs in all_outputs:                                                                 # outputs : outputs from a single prompt
@@ -283,7 +283,7 @@ class BatchSmoothLLMHydra(Defense):
             torch.cuda.empty_cache()
             # 180 sec
         
-        all_outputs = data_loading.divide_into_chunks(all_outputs, chunk_size = self.num_copies)    # list of lists of outputs from the same prompt
+        all_outputs = prompt_object_generator.divide_into_chunks(all_outputs, chunk_size = self.num_copies)    # list of lists of outputs from the same prompt
         majority_output_list = []
         
         for outputs in all_outputs:                                 # outputs : outputs from a single prompt

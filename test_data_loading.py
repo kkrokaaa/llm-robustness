@@ -12,8 +12,8 @@ import lib.defenses as defenses
 import lib.attacks as attacks
 import lib.language_models as language_models
 import lib.model_configs as model_configs
-import lib.data_loading as data_loading                                 #
-from assessment import Evaluator
+import lib.prompt_object_generator as prompt_object_generator                                 #
+from lib.assessment import Evaluator
 
 from datasets import load_dataset, Dataset                              #
 from torch.utils.data import DataLoader                                 #
@@ -60,7 +60,7 @@ def main(args):
     # replacing <GCG> when using general dataset;   <GCG> is used for creating <Prompt>
     data1 = load_dataset('truthful_qa', 'generation')
     print('data : ', data1)    
-    prompt_generator1 = data_loading.PromptGeneratorForTruthfulQA(target_model = target_model) 
+    prompt_generator1 = prompt_object_generator.PromptGeneratorForTruthfulQA(target_model = target_model) 
 
     jailbroken_results = []
     prompt_list = []                                                            #
@@ -77,7 +77,7 @@ def main(args):
     '''
     
     data1 = load_dataset('truthful_qa', 'generation')
-    prompt_generator2 = data_loading.BatchPromptGenerator(target_model)
+    prompt_generator2 = prompt_object_generator.BatchPromptGenerator(target_model)
     prompt_generator2.make_batches(data1['validation']['question'], batch_size = 8)
     prompt_list = prompt_generator2.batches                                     # list of lists of <Prompt>s
     

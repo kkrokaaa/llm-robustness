@@ -15,8 +15,8 @@ import lib.defenses as defenses
 import lib.attacks as attacks
 import lib.language_models as language_models
 import lib.model_configs as model_configs
-import lib.data_loading as data_loading                                 #
-from assessment import Evaluator
+import lib.prompt_object_generator as prompt_object_generator                                 #
+from lib.assessment import Evaluator
 
 from datasets import load_dataset, Dataset                              #
 from torch.utils.data import DataLoader                                 #
@@ -35,7 +35,7 @@ def main(cfg:DictConfig):
                                       num_copies = cfg.smoothllm_num_copies)
            
     data1 = load_dataset('truthful_qa', 'generation')
-    prompt_generator2 = data_loading.BatchPromptGenerator(target_model)
+    prompt_generator2 = prompt_object_generator.BatchPromptGenerator(target_model)
     prompt_generator2.make_batches(data1['validation']['question'], batch_size = 8)
     prompt_list = prompt_generator2.batches                                     # list of lists of <Prompt>s
     
