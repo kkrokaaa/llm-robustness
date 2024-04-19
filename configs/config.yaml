@@ -6,3 +6,4 @@ defaults:
   - model: llama2
   - perturbation: RandomSwapPerturbation
   - metric: rouge 
+  - data_format: mmlu

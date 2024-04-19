@@ -25,14 +25,7 @@ def main(args):
     
     # Instantiate the targeted LLM
     config = model_configs.MODELS[args.target_model]
-    '''
-    target_model = language_models.LLM(
-        model_path=config['model_path'],
-        tokenizer_path=config['tokenizer_path'],
-        conv_template_name=config['conversation_template'],
-        device='cuda:0'
-    )
-    '''
+
     target_model = language_models.BatchLLM(
         model_path=config['model_path'],
         tokenizer_path=config['tokenizer_path'],
@@ -41,40 +34,12 @@ def main(args):
     )
     
     # Create SmoothLLM instance
-    '''
-    defense = defenses.SmoothLLM(
-        target_model=target_model,
-        pert_type=args.smoothllm_pert_type,
-        pert_pct=args.smoothllm_pert_pct,
-        num_copies=args.smoothllm_num_copies
-    )
-    '''
     defense = defenses.BatchSmoothLLM(
         target_model=target_model,
         pert_type=args.smoothllm_pert_type,
         pert_pct=args.smoothllm_pert_pct,
         num_copies=args.smoothllm_num_copies
     )
-           
-    '''
-    # replacing <GCG> when using general dataset;   <GCG> is used for creating <Prompt>
-    data1 = load_dataset('truthful_qa', 'generation')
-    print('data : ', data1)    
-    prompt_generator1 = prompt_object_generator.PromptGeneratorForTruthfulQA(target_model = target_model) 
-
-    jailbroken_results = []
-    prompt_list = []                                                            #
-    output_list = []                                                            #
-    for i, data in tqdm(enumerate(data1['validation'])):                        ###
-        prompt = prompt_generator1.generate_prompt(data)
-        output = defense(prompt)
-        jb = defense.is_jailbroken(output)
-        jailbroken_results.append(jb)
-        prompt_list.append(prompt.full_prompt)                          #
-        output_list.append(output)
-        if i>10:
-            break
-    '''
     
     data1 = load_dataset('truthful_qa', 'generation')
     prompt_generator2 = prompt_object_generator.BatchPromptGenerator(target_model)
@@ -93,33 +58,6 @@ def main(args):
             full_prompt_list.append(batch_prompt[j].full_prompt)                # TODO : not exactly corresponding prompt if the model raises error (not if set as bfloat16)
         # 230 sec (batch size 8 * smoothllm num copies 10)
         break
-        
-
-    
-    '''
-    #print(f'We made {num_errors} errors')                  #
-    print('-----------------------------------')
-    print('prompt list : ', full_prompt_list)
-    print('-----------------------------------')
-    print('jailbroken results : ', jailbroken_results)
-    print('-----------------------------------')
-    print('output list : ', output_list)
-    print('-----------------------------------')
-        
-        
-        
-        
-    import pprint
-    print('output detail')
-    for i in range(3):
-        print(i)
-        pprint.pprint(full_prompt_list[i])
-        print(jailbroken_results[i])
-        pprint.pprint(output_list[i])
-        print('-----------------------------------')
-    '''
-
-    # print(f'We made {num_errors} errors')
 
     # Save results to a pandas DataFrame
     summary_df = pd.DataFrame.from_dict({
@@ -128,9 +66,9 @@ def main(args):
         'Perturbation percentage': [args.smoothllm_pert_pct],
         'JB percentage': [np.mean(jailbroken_results) * 100],
         'Trial index': [args.trial],
-        'Prompts' : [full_prompt_list],                                         #
-        'Jailbroken' : [jailbroken_results],                                    #
-        'Defense Output' : [output_list]                                        #
+        'Prompts' : [full_prompt_list],
+        'Jailbroken' : [jailbroken_results],
+        'Defense Output' : [output_list]
     })                                                                          # pd df : rows should be of same length 
     summary_df.to_pickle(os.path.join(
         args.results_dir, 'summary.pd'
@@ -213,7 +151,7 @@ if __name__ == '__main__':
     
 '''
 ex)
-python test_data_loading.py \
+python main_batch.py \
     --results_dir ./test \
     --target_model llama2 \
     --attack GCG \

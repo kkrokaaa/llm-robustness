@@ -81,9 +81,9 @@ if __name__ == '__main__':
     
 '''
 ex)
-python test_hydra.py
+python main_hydra.py
     result is saved in outputs
-python test_hydra.py -m model=llama2,vicuna smoothllm_perturbation_rate=1,5 smoothllm_num_copies=3
+python main_hydra.py -m model=llama2,vicuna smoothllm_perturbation_rate=1,5 smoothllm_num_copies=3
     results are saved in multirun
     
 '''
