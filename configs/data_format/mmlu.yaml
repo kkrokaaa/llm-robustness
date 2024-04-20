@@ -1,3 +1,4 @@
+tokenizer: null
 data_source: lukaemon/mmlu
 save_dir: data/mmlu
 num_example: 5

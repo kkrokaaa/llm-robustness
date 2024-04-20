@@ -5,3 +5,6 @@ llm-attacks/
 data/PAIR
 plotting/
 smoothing_ASR.png
+
+data/mmlu*
+transformers/

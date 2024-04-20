@@ -252,7 +252,8 @@ def mmlu_formatter(
 
     return merged_datasetdict                                                                       # DatasetDict{ 'mmlu__astronomy__train' : Dataset(...), ...}
 
-def load_data(data_source: str,
+def load_data(tokenizer: transformers.PreTrainedTokenizer,
+              data_source: str,
               task_list: List,
               save_dir: str,
               cache: bool = True,
@@ -260,9 +261,7 @@ def load_data(data_source: str,
               merge_split: bool = True,
               conv_generation: bool = True,
               cache_dir: Optional[str] = None
-    ):
-    #tokenizer = AutoTokenizer.from_pretrained('meta-llama/Llama-2-7b-hf', device_map = 'auto')
-    tokenizer = None
+    ) -> datasets.DatasetDict:
     data_total = None
     
     if cache:

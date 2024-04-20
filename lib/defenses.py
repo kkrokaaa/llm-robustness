@@ -148,7 +148,7 @@ class BatchSmoothLLM(Defense):
         for prompt in batch_prompt:
             for _ in range(self.num_copies):
                 prompt_copy = copy.deepcopy(prompt)
-                prompt_copy.perturb(self.perturbation_fn)
+                #prompt_copy.perturb(self.perturbation_fn)
                 all_inputs.append(prompt_copy.full_prompt)
                 all_start_noise_idx.append(prompt_copy.start_noise_idx)
                 all_end_noise_idx.append(prompt_copy.end_noise_idx)
@@ -246,7 +246,7 @@ class BatchSmoothLLMHydra(Defense):
         for prompt in batch_prompt:
             for _ in range(self.num_copies):
                 prompt_copy = copy.deepcopy(prompt)
-                prompt_copy.perturb(self.perturbation_fn)
+                #prompt_copy.perturb(self.perturbation_fn)
                 all_inputs.append(prompt_copy.full_prompt)
                 all_start_noise_idx.append(prompt_copy.start_noise_idx)
                 all_end_noise_idx.append(prompt_copy.end_noise_idx)
@@ -317,3 +317,100 @@ class BatchSmoothLLMHydra(Defense):
             ret += k * shifted_seq
         return ret
 
+
+class BatchSmoothLLMHydraForward(Defense):
+    def __init__(self, target_model, perturbation, num_copies):
+        super(BatchSmoothLLMHydraForward, self).__init__(target_model)
+        
+        self.num_copies = num_copies
+        self.perturbation_fn = perturbation
+
+    @torch.no_grad()
+    def __call__(self, batch_prompt, batch_size=64, max_new_len=100, answer_choice_list = ['A', 'B', 'C', 'D']):
+        # batch_prompt : list of <Prompt>s              
+        # batch_size : number of data fed in self.target_model at a time;   if batch_size does not divide (number of <Prompt>s in batch_prompt) * self.num_copies, perturbations from the same <Prompt> might be fed in different batch;    will be handled after the bottleneck
+        all_inputs = []
+        all_start_noise_idx = []
+        all_end_noise_idx = []
+        
+        for prompt in batch_prompt:
+            for _ in range(self.num_copies):
+                prompt_copy = copy.deepcopy(prompt)
+                #prompt_copy.perturb(self.perturbation_fn)
+                all_inputs.append(prompt_copy.full_prompt)
+                all_start_noise_idx.append(prompt_copy.start_noise_idx)
+                all_end_noise_idx.append(prompt_copy.end_noise_idx)
+        # all_inputs = [prompt1-1, ..., prompt1-self.num_copies, prompt2-1, ... ]
+
+        # Iterate each batch of inputs
+        all_outputs = []
+        for i in range(len(all_inputs) // batch_size + 1):
+            # Get the current batch of inputs
+            batch = all_inputs[i*batch_size : (i+1)*batch_size]
+            start_noise_idx_list = all_start_noise_idx[i*batch_size : (i+1)*batch_size]
+            end_noise_idx_list = all_end_noise_idx[i*batch_size : (i+1)*batch_size]
+           
+            probs = self.target_model.get_probs(batch, start_noise_idx_list, end_noise_idx_list)                                                                               # .get_probs does not use noise indices; batch could be consisted of perturbations from different prompts
+            
+            neg_log_likelihood = -torch.log(probs)                  # negative log likelihood : batch size x max sentence length of the batch
+            noise_scale = torch.zeros_like(neg_log_likelihood, dtype=torch.float, device=self.target_model.model.device)
+            
+            # each prompt might have different noise indices
+            for j in range(len(batch)):
+                noise_scale[j, start_noise_idx_list[j] : end_noise_idx_list[j]] = self.moving_average(
+                    neg_log_likelihood[j, start_noise_idx_list[j] : end_noise_idx_list[j]], [0.1,0.2,0.3,0.4-(1e-10),1e-10])
+            
+            noise_scale = torch.clamp(noise_scale/10, min=0, max=1)
+
+            # Run a forward pass through the LLM for each perturbed copy
+            batch_outputs = self.target_model(batch, 
+                                              start_noise_idx_list, 
+                                              end_noise_idx_list, 
+                                              noise_scale, 
+                                              max_new_tokens=prompt.max_new_tokens)                 # bottleneck    # logits : batch size x max length x vocab size
+
+            all_outputs.extend(batch_outputs)
+            torch.cuda.empty_cache()
+        
+        all_outputs = prompt_object_generator.divide_into_chunks(all_outputs, chunk_size = self.num_copies)    # list of lists of outputs from the same prompt
+        majority_output_list = []
+        
+        for outputs in all_outputs:                                 # outputs : outputs from a single prompt;   list of tensors
+            answer_logits = self._get_answer_choice_logits(logits = outputs, answer_choice_list = answer_choice_list)
+            majority_output = self._get_most_likely_answers(answer_logits, answer_choice_list)
+            
+            if len(majority_output) == 0:
+                raise ValueError("LLM did not generate any outputs.")
+            
+            majority_output_list.append( random.choice(majority_output) )
+            
+        return majority_output_list                                 # list of index of choice (ex) [3,3,0,1, ...])
+    
+    
+    def moving_average(self, seq, multiplier):
+        # seq : 1 dim Tensor
+        assert sum(multiplier) == 1
+        ret = torch.zeros_like(seq, dtype=torch.float)
+        for offset, k in enumerate(multiplier[::-1]):
+            shifted_seq = torch.roll(seq, offset, dims=-1)
+            shifted_seq[:offset] = 0
+            ret += k * shifted_seq
+        return ret
+
+
+    def _get_answer_choice_logits(self, logits, answer_choice_list = ['A', 'B', 'C', 'D']):
+        batch_size = len(logits)
+        letter_tokens = [self.target_model.tokenizer.encode(letter)[1] for letter in answer_choice_list]        # [0] : bos
+        answer_choice_logits = torch.zeros( (batch_size, len(answer_choice_list)), dtype=torch.float16)         # batch size x answer choices
+        
+        for i in range(batch_size):
+            answer_choice_logits[i,:] = torch.tensor([logits[i][-1,token_idx] for token_idx in letter_tokens],dtype=torch.float16)
+        
+        return answer_choice_logits
+    
+    def _get_most_likely_answers(self, logits, answer_choice_list):                                             # logits : batch size x answer choices
+        # assume logits have a unique maximizer on each row
+        answer_counts = torch.sum( logits == torch.max(logits, dim=-1, keepdim=True).values, dim=0 )            # answer_counts : (answer choices,)
+        max_count_positions = (answer_counts == torch.max( answer_counts ))
+        candidates = torch.LongTensor(range(len(answer_choice_list)))[max_count_positions]
+        return candidates
