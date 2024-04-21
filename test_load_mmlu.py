@@ -17,7 +17,7 @@ import lib.language_models as language_models
 import lib.model_configs as model_configs
 import lib.prompt_object_generator as prompt_object_generator   
 import lib.data_loader as data_loader
-from lib.assessment import Evaluator
+import lib.assessment as assessment
 
 from datasets import load_dataset, Dataset                              #
 from torch.utils.data import DataLoader                                 #
@@ -34,48 +34,52 @@ def main(cfg:DictConfig):
     defense = defenses.BatchSmoothLLMHydra(target_model=target_model,
                                       perturbation = instantiate(cfg.perturbation.perturbation),
                                       num_copies = cfg.smoothllm_num_copies)
-           
-    data = data_loader.load_data(data_source = cfg.data_format.data_source,
+    print('start loading the data')
+    data = data_loader.load_data(tokenizer = cfg.data_format.tokenizer,
+                                 data_source = cfg.data_format.data_source,
                                  task_list = cfg.data_format.task_list,
+                                 save_dir = cfg.data_format.save_dir,
                                  cache = cfg.data_format.cache,
                                  num_example = cfg.data_format.num_example,
                                  merge_split = cfg.data_format.merge_split,
                                  conv_generation = cfg.data_format.conv_generation,
                                  cache_dir = cfg.data_format.cache_dir)         # DatasetDict
+    print('data loaded')
               
-    prompt_generator = prompt_object_generator.BatchPromptGenerator(target_model)
-    prompt_generator.make_batches(data['mmlu__anatomy__test'][0]['tokenized_prompt'], batch_size = 8)           # TODO : now the data is DatasetDict
-    prompt_list = prompt_generator.batches                                      # list of lists of <Prompt>s
+    prompt_generator = prompt_object_generator.MMLUBatchPromptGenerator(target_model)
+    prompt_dict = prompt_generator.make_batches(data, batch_size = 8)
+    evaluator = assessment.Evaluator(cfg.metric.metric_name)
     
-    jailbroken_results = []                                                    
-    output_list = []                                                            #
-    full_prompt_list = []                                                       #
+    result_dict = {}
     
-    for i, batch_prompt in tqdm(enumerate(prompt_list)):                        # batch_prompt : list of <Prompt>s             #
-        batch_output = defense(batch_prompt)
-        for j, output in enumerate(batch_output):
-            jb = defense.is_jailbroken(output)                                  # TODO : different criterion needed
-            jailbroken_results.append(jb)
-            output_list.append(output)
-            full_prompt_list.append(batch_prompt[j].full_prompt)                # TODO : not exactly corresponding prompt if the model raises error (not if set as bfloat16)
-        # 230 sec (batch size 8 * smoothllm num copies 10)
+    for i, (dataset_name, data_dict) in tqdm(enumerate(prompt_dict.items())):   # data_dict : {'prompt_batches' : ..., 'answer_batches' : ...}
+        result_dict[dataset_name] = {'output' : [], 'full_prompt' : [], 'answer' : [], 'performance' : []}
+        
+        for batch_prompt, batch_answer in zip(data_dict['prompt_batches'], data_dict['answer_batches']):
+            print('batch loop')
+            batch_output = defense(batch_prompt)
+            for j, output in enumerate(batch_output):
+                result_dict[dataset_name]['output'].append(output)
+                result_dict[dataset_name]['full_prompt'].append(batch_prompt[j].full_prompt)
+                result_dict[dataset_name]['answer'].append(batch_answer[j])
+            break
+        result_dict[dataset_name]['performance'].append(evaluator( result_dict[dataset_name]['output'], result_dict[dataset_name]['answer'] ))
+        print(f"dataset name : {dataset_name}")
+        print(f"full prompt : {[result_dict[dataset_name]['full_prompt']]}")
+        print(f"answer : {[result_dict[dataset_name]['answer']]}")
+        print(f"output : {[result_dict[dataset_name]['output']]}")
+        print(f"performance : {[result_dict[dataset_name]['performance']]}")
         break
-    
-    
-    
-    evaluator = Evaluator(cfg.metric.metric_name)
-    performance = evaluator(output_list, full_prompt_list)
 
     # Save results to a pandas DataFrame
     summary_df = pd.DataFrame.from_dict({
-        'Number of smoothing copies': [cfg.smoothllm_num_copies],
-        'Perturbation type': [cfg.perturbation],
-        'Perturbation percentage': [cfg.smoothllm_perturbation_rate],
-        'JB percentage': [np.mean(jailbroken_results) * 100],
-        'Prompts' : [full_prompt_list],                                         #
-        'Jailbroken' : [jailbroken_results],                                    #
-        'Defense Output' : [output_list],                                       #
-        'Performance' : [performance]                                           #
+        'Number of smoothing copies':   [cfg.smoothllm_num_copies],
+        'Perturbation type':            [cfg.perturbation],
+        'Perturbation percentage':      [cfg.smoothllm_perturbation_rate],
+        'Output' :                      [result_dict[dataset_name]['output']],
+        'Full prompt' :                 [result_dict[dataset_name]['full_prompt']],
+        'Answer' :                      [result_dict[dataset_name]['answer']],
+        'Performance' :                 [result_dict[dataset_name]['performance']]
     })                                                                          # pd df : rows should be of same length 
     summary_df.to_pickle(os.path.join( hydra.core.hydra_config.HydraConfig.get().runtime.output_dir, 'summary.pd' ))
     
