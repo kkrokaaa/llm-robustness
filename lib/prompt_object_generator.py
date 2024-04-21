@@ -185,41 +185,32 @@ def divide_into_chunks(object_list, chunk_size = 8):
 # DatasetDict
 class BatchPromptGeneratorWithoutFormatting:
     def __init__(self, target_model):
-        # target_model : <LLM>,     data : list of strings
+        # target_model : <LLM>
         self.target_model = target_model
-        self.batches = None
     
-    def make_batches(self, data, batch_size = 8):   
-        # batch_size : number of <Prompt>s in a single chunk
-        self.batches = divide_into_chunks(self._generate_whole_prompt(data), chunk_size = batch_size)            # list of lists of <Prompt>s
+    def make_batches(self, dataset_dict, batch_size = 8):
+        """
+        Args:
+            dataset_dict : DatasetDict
+            batch_size : number of <Prompt>s in a single chunk
+        """
+        batch_dataset_dict = {}
+        for dataset_name, data_set in dataset_dict.items():
+            batch_dataset_dict[dataset_name] = {}
+            batch_dataset_dict[dataset_name]['prompt_batches'] = divide_into_chunks(self._generate_whole_prompt(data_set['prompt']), chunk_size = batch_size)      # list of lists of <Prompt>s
+            batch_dataset_dict[dataset_name]['answer_batches'] = divide_into_chunks(data_set['answer'], chunk_size = batch_size)
+        return batch_dataset_dict
     
     def get_full_prompts(self, batch_prompt):
         #return [ [prompt.full_prompt for prompt in batch] for batch in self.batches]
         return [prompt.full_prompt for prompt in batch_prompt]
         
-    def _generate_single_prompt(self, sample, max_new_len=100, set_system_prompt = False):                   
-        # sample : 1 question (string)
-        #max_length = max(list( map(len, self.target_model.tokenizer(data['incorrect_answers'])) ))             # data['incorrect_answers'] : list of strings
+    def _generate_single_prompt(self, sample, max_new_len=100):
+        # sample : 1 prompt string
         max_length = len( self.target_model.tokenizer(sample) ) 
         max_new_tokens = max( max_length +2, max_new_len )
         
-        if set_system_prompt:
-            # setting the prompt;   with system prompt
-            # wrapping the question with a template
-            conv_template = self.target_model.conv_template
-            #conv_template.set_system_message('an example system message')
-            conv_template.append_message( conv_template.roles[0], f"{sample}" )
-            conv_template.append_message( conv_template.roles[1], f"" )
-            prompt = conv_template.get_prompt()
-        
-        else:
-            # setting the prompt;   without system prompt
-            prompt = f'{sample}'
-        
-        encoding = self.target_model.tokenizer(prompt)
-        full_prompt = self.target_model.tokenizer.decode( encoding.input_ids ).replace('<s>','').replace('</s>','')
-        if set_system_prompt:
-            conv_template.messages = []
+        full_prompt = sample
         
         start_index = full_prompt.find(sample)
         end_index = start_index + len(sample)
@@ -227,14 +218,14 @@ class BatchPromptGeneratorWithoutFormatting:
         
         prefix = self.target_model.tokenizer(full_prompt[:start_index])
         prefix_len = len(prefix.input_ids)
-        # prefix_len = len(prefix.input_ids) - 1  # -1 for the eos token
+        # actual prefix length = len(prefix.input_ids) - 1  # -1 for the eos token
         prefix_and_perturbable = self.target_model.tokenizer(full_prompt[:end_index])
         prefix_and_perturbable_len = len(prefix_and_perturbable.input_ids)
-        # prefix_and_perturbable_len = len(prefix_and_perturbable.input_ids) - 1  # -1 for the eos token
+        # actual prefix_and_perturbable length = len(prefix_and_perturbable.input_ids) - 1  # -1 for the eos token
         
         return attacks.Prompt(full_prompt, perturbable_prompt, max_new_tokens, prefix_len, prefix_and_perturbable_len)
     
-    def _generate_whole_prompt(self, question_list):
-        # question : all the questions (list of strings)   ->  return a list of <Prompt>s
-        prompt_list = [self._generate_single_prompt(s) for s in question_list]
+    def _generate_whole_prompt(self, string_list):
+        # string_list : list of prompt strings   ->  return a list of <Prompt>s
+        prompt_list = [self._generate_single_prompt(s) for s in string_list]
         return prompt_list

@@ -274,7 +274,7 @@ def load_data(tokenizer: transformers.PreTrainedTokenizer,
     if data_total is None:
         for task in task_list:
             data = load_dataset(data_source, task)
-            data.save_to_disk(save_dir + task)
+            data.save_to_disk(save_dir + '/' + task)
 
         data_total = mmlu_formatter(tokenizer, 
                                     dpath = save_dir, 
