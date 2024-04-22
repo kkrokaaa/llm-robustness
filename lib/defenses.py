@@ -382,7 +382,7 @@ class BatchSmoothLLMHydraForward(Defense):
             if len(majority_output) == 0:
                 raise ValueError("LLM did not generate any outputs.")
             
-            majority_output_list.append( random.choice(majority_output) )
+            majority_output_list.append( answer_choice_list[random.choice(majority_output)] )
             
         return majority_output_list                                 # list of index of choice (ex) [3,3,0,1, ...])
     

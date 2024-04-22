@@ -28,6 +28,17 @@ class Evaluator:
 
 
 
+class MatchEvaluator:
+    def __call__(self, predictions, references):
+        assert len(predictions) == len(references)
+        total = len(predictions)
+        count = 0
+        for a,b in zip(predictions, references):
+            count += (a==b)
+        return count, total
+
+
+
 
 def main(args):
 
