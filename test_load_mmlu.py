@@ -1,4 +1,5 @@
 import os
+import sys
 import torch
 import numpy as np
 import pandas as pd
@@ -35,7 +36,8 @@ def main(cfg:DictConfig):
     # Create SmoothLLM instance
     defense = defenses.BatchSmoothLLMHydraForward(target_model=target_model,
                                       perturbation = instantiate(cfg.perturbation.perturbation),
-                                      num_copies = cfg.smoothllm_num_copies)
+                                      num_copies = cfg.smoothllm_num_copies,
+                                      noise_level = cfg.noise_level)
     print('load data')
     data = data_loader.load_data(tokenizer = cfg.data_format.tokenizer,
                                  data_source = cfg.data_format.data_source,
@@ -46,28 +48,31 @@ def main(cfg:DictConfig):
                                  merge_split = cfg.data_format.merge_split,
                                  conv_generation = cfg.data_format.conv_generation,
                                  cache_dir = cfg.data_format.cache_dir)         # DatasetDict
-    print('data loaded')
-              
+    print(f'data loaded, data size : {sys.getsizeof(data)}')
+    
+    print('generate propmts')
     prompt_generator = prompt_object_generator.BatchPromptGeneratorWithoutFormatting(target_model)
     prompt_dict = prompt_generator.make_batches(data, batch_size = 8)
+    print(f'prompts generated, prompt size : {sys.getsizeof(prompt_dict)}')
     #evaluator = assessment.Evaluator(cfg.metric.metric_name)
     evaluator = assessment.MatchEvaluator()
     
     result_dict = {}
     
     for i, (dataset_name, data_set) in tqdm(enumerate(prompt_dict.items())):
-        result_dict[dataset_name] = {'full_prompt' : [], 'answer' : [], 'output' : [], 'performance' : None}
-        for (batch_prompt, batch_answer) in zip(data_set['prompt_batches'], data_set['answer_batches']):
-            batch_output = defense(batch_prompt, answer_choice_list=['A', 'B', 'C', 'D'])
+        result_dict[dataset_name] = {'full_prompt' : [], 'answer' : [], 'output' : [], 'correct' : None, 'total' : None}
+        for batch_prompt, batch_answer in zip(data_set['prompt_batches'], data_set['answer_batches']):
+            batch_output = defense(batch_prompt, batch_size = 16, answer_choice_list=['A', 'B', 'C', 'D'])
             for j, output in enumerate(batch_output):
                 result_dict[dataset_name]['full_prompt'].append(batch_prompt[j].full_prompt)
                 result_dict[dataset_name]['answer'].append(batch_answer[j])
                 result_dict[dataset_name]['output'].append(output)
-            break
+            #break
         #result_dict[dataset_name]['performance'] = evaluator(result_dict[dataset_name]['output'], result_dict[dataset_name]['answer'])
         correct, total = evaluator(result_dict[dataset_name]['output'], result_dict[dataset_name]['answer'])
-        result_dict[dataset_name]['performance'] = correct / total
-        break
+        result_dict[dataset_name]['correct'] = correct
+        result_dict[dataset_name]['total'] = total
+        #break
 
     # Save results to a pandas DataFrame
     summary_df = pd.DataFrame.from_dict({
@@ -77,7 +82,8 @@ def main(cfg:DictConfig):
         'Prompts' : [{dataset_name : dataset_result['full_prompt'] for dataset_name, dataset_result in result_dict.items()}],
         'Answers' : [{dataset_name : dataset_result['answer'] for dataset_name, dataset_result in result_dict.items()}],
         'Outputs' : [{dataset_name : dataset_result['output'] for dataset_name, dataset_result in result_dict.items()}],
-        'Performance' : [{dataset_name : dataset_result['performance'] for dataset_name, dataset_result in result_dict.items()}]
+        'Correct' : [{dataset_name : dataset_result['correct'] for dataset_name, dataset_result in result_dict.items()}],
+        'Total' : [{dataset_name : dataset_result['total'] for dataset_name, dataset_result in result_dict.items()}],
         #'Performance' : [result_dict[dataset_name]['performance']]
     })                                                                          # pd df : rows should be of same length 
     summary_df.to_pickle(os.path.join( hydra.core.hydra_config.HydraConfig.get().runtime.output_dir, 'summary.pd' ))
