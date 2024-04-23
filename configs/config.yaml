@@ -1,5 +1,6 @@
 smoothllm_num_copies: 10
 smoothllm_perturbation_rate: 10
+noise_level: 1
 
 defaults:
   - _self_

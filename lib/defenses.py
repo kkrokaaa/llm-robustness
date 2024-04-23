@@ -319,11 +319,12 @@ class BatchSmoothLLMHydra(Defense):
 
 
 class BatchSmoothLLMHydraForward(Defense):
-    def __init__(self, target_model, perturbation, num_copies):
+    def __init__(self, target_model, perturbation, num_copies, noise_level):
         super(BatchSmoothLLMHydraForward, self).__init__(target_model)
         
         self.num_copies = num_copies
         self.perturbation_fn = perturbation
+        self.noise_level = noise_level
 
     @torch.no_grad()
     def __call__(self, batch_prompt, batch_size=64, max_new_len=100, answer_choice_list = ['A', 'B', 'C', 'D']):
@@ -347,6 +348,8 @@ class BatchSmoothLLMHydraForward(Defense):
         for i in range(len(all_inputs) // batch_size + 1):
             # Get the current batch of inputs
             batch = all_inputs[i*batch_size : (i+1)*batch_size]
+            if not batch:
+                continue
             start_noise_idx_list = all_start_noise_idx[i*batch_size : (i+1)*batch_size]
             end_noise_idx_list = all_end_noise_idx[i*batch_size : (i+1)*batch_size]
            
@@ -360,7 +363,7 @@ class BatchSmoothLLMHydraForward(Defense):
                 noise_scale[j, start_noise_idx_list[j] : end_noise_idx_list[j]] = self.moving_average(
                     neg_log_likelihood[j, start_noise_idx_list[j] : end_noise_idx_list[j]], [0.1,0.2,0.3,0.4-(1e-10),1e-10])
             
-            noise_scale = torch.clamp(noise_scale/10, min=0, max=1)
+            noise_scale = torch.clamp(noise_scale/10 * self.noise_level, min=0, max=1)
 
             # Run a forward pass through the LLM for each perturbed copy
             batch_outputs = self.target_model(batch, 
