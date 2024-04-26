@@ -229,3 +229,59 @@ class BatchPromptGeneratorWithoutFormatting:
         # string_list : list of prompt strings   ->  return a list of <Prompt>s
         prompt_list = [self._generate_single_prompt(s) for s in string_list]
         return prompt_list
+
+
+
+class MMLUBatchPromptGeneratorDatasetwise:
+    def __init__(self, target_model):
+        # target_model : <LLM>
+        self.target_model = target_model
+    
+    def make_dict_batches(self, dataset_dict, batch_size = 8):
+        """
+        Args:
+            dataset_dict : DatasetDict
+            batch_size : number of <Prompt>s in a single chunk
+        """
+        batch_dataset_dict = {}
+        for dataset_name, data_set in dataset_dict.items():
+            batch_dataset_dict[dataset_name] = {}
+            batch_dataset_dict[dataset_name]['prompt_batches'] = divide_into_chunks(self._generate_whole_prompt(data_set['prompt']), chunk_size = batch_size)      # list of lists of <Prompt>s
+            batch_dataset_dict[dataset_name]['answer_batches'] = divide_into_chunks(data_set['answer'], chunk_size = batch_size)
+        return batch_dataset_dict
+    
+    def make_batches(self, data_set, batch_size = 8):
+        # Dataset version
+        batch_dataset = {}
+        batch_dataset['prompt_batches'] = divide_into_chunks(self._generate_whole_prompt(data_set['prompt']), chunk_size = batch_size)      # list of lists of <Prompt>s
+        batch_dataset['answer_batches'] = divide_into_chunks(data_set['answer'], chunk_size = batch_size)
+        return batch_dataset
+    
+    def get_full_prompts(self, batch_prompt):
+        #return [ [prompt.full_prompt for prompt in batch] for batch in self.batches]
+        return [prompt.full_prompt for prompt in batch_prompt]
+        
+    def _generate_single_prompt(self, sample, max_new_len=100):
+        # sample : 1 prompt string
+        max_length = len( self.target_model.tokenizer(sample) ) 
+        max_new_tokens = max( max_length +2, max_new_len )
+        
+        full_prompt = sample
+        
+        start_index = full_prompt.find(sample)
+        end_index = start_index + len(sample)
+        perturbable_prompt = full_prompt[start_index:end_index]
+        
+        prefix = self.target_model.tokenizer(full_prompt[:start_index])
+        prefix_len = len(prefix.input_ids)
+        # actual prefix length = len(prefix.input_ids) - 1  # -1 for the eos token
+        prefix_and_perturbable = self.target_model.tokenizer(full_prompt[:end_index])
+        prefix_and_perturbable_len = len(prefix_and_perturbable.input_ids)
+        # actual prefix_and_perturbable length = len(prefix_and_perturbable.input_ids) - 1  # -1 for the eos token
+        
+        return attacks.Prompt(full_prompt, perturbable_prompt, max_new_tokens, prefix_len, prefix_and_perturbable_len)
+    
+    def _generate_whole_prompt(self, string_list):
+        # string_list : list of prompt strings   ->  return a list of <Prompt>s
+        prompt_list = [self._generate_single_prompt(s) for s in string_list]
+        return prompt_list

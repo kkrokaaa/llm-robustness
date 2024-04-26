@@ -57,36 +57,33 @@ def main(cfg:DictConfig):
     #evaluator = assessment.Evaluator(cfg.metric.metric_name)
     evaluator = assessment.MatchEvaluator()
     
-    result_dict = {}
     
     for i, (dataset_name, data_set) in tqdm(enumerate(prompt_dict.items())):
-        result_dict[dataset_name] = {'full_prompt' : [], 'answer' : [], 'output' : [], 'correct' : None, 'total' : None}
+        result_dict = {'full_prompt' : [], 'answer' : [], 'output' : [], 'correct' : None, 'total' : None}
+        
         for batch_prompt, batch_answer in zip(data_set['prompt_batches'], data_set['answer_batches']):
             batch_output = defense(batch_prompt, batch_size = 16, answer_choice_list=['A', 'B', 'C', 'D'])
             for j, output in enumerate(batch_output):
-                result_dict[dataset_name]['full_prompt'].append(batch_prompt[j].full_prompt)
-                result_dict[dataset_name]['answer'].append(batch_answer[j])
-                result_dict[dataset_name]['output'].append(output)
-            #break
-        #result_dict[dataset_name]['performance'] = evaluator(result_dict[dataset_name]['output'], result_dict[dataset_name]['answer'])
-        correct, total = evaluator(result_dict[dataset_name]['output'], result_dict[dataset_name]['answer'])
-        result_dict[dataset_name]['correct'] = correct
-        result_dict[dataset_name]['total'] = total
-        #break
-
-    # Save results to a pandas DataFrame
-    summary_df = pd.DataFrame.from_dict({
-        'Number of smoothing copies': [cfg.smoothllm_num_copies],
-        'Perturbation type': [cfg.perturbation],
-        'Perturbation percentage': [cfg.smoothllm_perturbation_rate],
-        'Prompts' : [{dataset_name : dataset_result['full_prompt'] for dataset_name, dataset_result in result_dict.items()}],
-        'Answers' : [{dataset_name : dataset_result['answer'] for dataset_name, dataset_result in result_dict.items()}],
-        'Outputs' : [{dataset_name : dataset_result['output'] for dataset_name, dataset_result in result_dict.items()}],
-        'Correct' : [{dataset_name : dataset_result['correct'] for dataset_name, dataset_result in result_dict.items()}],
-        'Total' : [{dataset_name : dataset_result['total'] for dataset_name, dataset_result in result_dict.items()}],
-        #'Performance' : [result_dict[dataset_name]['performance']]
-    })                                                                          # pd df : rows should be of same length 
-    summary_df.to_pickle(os.path.join( hydra.core.hydra_config.HydraConfig.get().runtime.output_dir, 'summary.pd' ))
+                result_dict['full_prompt'].append(batch_prompt[j].full_prompt)
+                result_dict['answer'].append(batch_answer[j])
+                result_dict['output'].append(output)
+                
+        correct, total = evaluator(result_dict['output'], result_dict['answer'])
+        result_dict['correct'] = correct
+        result_dict['total'] = total
+        
+        # Save results to a pandas DataFrame
+        summary_df = pd.DataFrame.from_dict({
+            'Number of smoothing copies': [cfg.smoothllm_num_copies],
+            'Perturbation type': [cfg.perturbation],
+            'Perturbation percentage': [cfg.smoothllm_perturbation_rate],
+            'Prompts' : [{dataset_name : result_dict['full_prompt']}],
+            'Answers' : [{dataset_name : result_dict['answer']}],
+            'Outputs' : [{dataset_name : result_dict['output']}],
+            'Correct' : [{dataset_name : result_dict['correct']}],
+            'Total' : [{dataset_name : result_dict['total']}],
+        })                                                                          # pd df : rows should be of same length 
+        summary_df.to_pickle(os.path.join( hydra.core.hydra_config.HydraConfig.get().runtime.output_dir, 'summary'+dataset_name+'.pd' ))
     
     
 

@@ -1,4 +1,4 @@
-smoothllm_num_copies: 10
+smoothllm_num_copies: 8
 smoothllm_perturbation_rate: 10
 noise_level: 1
 
@@ -8,3 +8,5 @@ defaults:
   - perturbation: RandomSwapPerturbation
   - metric: rouge 
   - data_format: mmlu
+  - finished_task_list: mmlu
+  - todo_task_list: mmlu
