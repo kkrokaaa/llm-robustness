@@ -432,8 +432,7 @@ class SmoothLLMHydraForward(Defense):
     @torch.no_grad()
     def __call__(self, batch_prompt, batch_size=64, max_new_len=100, answer_choice_list = ['A', 'B', 'C', 'D']):
         # batch_prompt : list of <Prompt>s              
-        ### batch_size : number of data fed in self.target_model at a time;   if batch_size does not divide (number of <Prompt>s in batch_prompt) * self.num_copies, perturbations from the same <Prompt> might be fed in different batch;    will be handled after the bottleneck
-
+        
         # Iterate each batch of inputs
         all_outputs = []
         for prompt in batch_prompt:
@@ -458,9 +457,10 @@ class SmoothLLMHydraForward(Defense):
             outputs = self.target_model(tokenized_input,
                                         prompt.start_noise_idx,
                                         prompt.end_noise_idx,
-                                        noise_scale,
+                                        noise_scale,                                            # noise scale : (1 x length) var of noise, based on predicted prob of next token at the preceding position
                                         num_copies = self.num_copies,
-                                        max_new_tokens=prompt.max_new_tokens)                 # bottleneck    # logits : batch size x max length x vocab size
+                                        noise_level = self.noise_level,                         # noise_level : (int) var of iid noise
+                                        max_new_tokens=prompt.max_new_tokens)                   # bottleneck    # logits : batch size x max length x vocab size
 
             all_outputs.extend(outputs)     # feed in 1 prompt, get num_copies outputs
             torch.cuda.empty_cache()

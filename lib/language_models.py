@@ -377,7 +377,7 @@ class LLMForward:
         if self.conv_template.name == 'llama-2':
             self.conv_template.sep2 = self.conv_template.sep2.strip()
 
-    def __call__(self, tokenized_input, start_noise_idx, end_noise_idx, noise_scale, max_new_tokens=100, num_copies = 8, original_prompt=None):
+    def __call__(self, tokenized_input, start_noise_idx, end_noise_idx, noise_scale, max_new_tokens=100, num_copies = 8, noise_level = 1, original_prompt=None):
         
         #if original_prompt:
         #    batch.append(original_prompt)
@@ -401,7 +401,8 @@ class LLMForward:
                 attention_mask=attention_masks,
                 start_noise_idx=start_noise_idx,
                 end_noise_idx=end_noise_idx,
-                noise_scale=noise_scale,
+                #noise_scale=noise_scale,
+                noise_level=noise_level
             )
         except RuntimeError as e:
             print('cannot forward; error raised : ', e)

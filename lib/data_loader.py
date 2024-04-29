@@ -289,6 +289,7 @@ def load_data(tokenizer: transformers.PreTrainedTokenizer,
 
 def load_data_datasetwise(tokenizer: transformers.PreTrainedTokenizer,
               data_source: str,
+              todo_task_list: List,
               task_list: List,
               save_dir: str,
               cache: bool = True,
@@ -307,7 +308,7 @@ def load_data_datasetwise(tokenizer: transformers.PreTrainedTokenizer,
 
         if Path(caching_path).exists():
             #logger.info(f"Loading cached dataset from {caching_path}")
-            for task_name in tqdm(task_list):
+            for task_name in tqdm(todo_task_list):
                 data_set = datasets.load_from_disk(caching_path + '/' + task_name)
                 yield task_name, data_set
             return None
