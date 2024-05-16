@@ -442,7 +442,7 @@ class SmoothLLMHydraForward(Defense):
             truncation=False, 
             return_tensors='pt'
             )
-          
+            '''
             probs = self.target_model.get_probs(tokenized_input)
             neg_log_likelihood = -torch.log(probs)                  # negative log likelihood : batch size x max sentence length of the batch
             noise_scale = torch.zeros_like(neg_log_likelihood, dtype=torch.float, device=self.target_model.model.device)
@@ -452,12 +452,12 @@ class SmoothLLMHydraForward(Defense):
                 neg_log_likelihood[:, prompt.start_noise_idx : prompt.end_noise_idx], [0.1,0.2,0.3,0.4-(1e-10),1e-10])
             
             noise_scale = torch.clamp(noise_scale/10 * self.noise_level, min=0, max=1)
-
-            # Run a forward pass through the LLM for each perturbed copy
+            '''
+            # Run a forward pass through the LLM for each perturbed copy    
             outputs = self.target_model(tokenized_input,
                                         prompt.start_noise_idx,
                                         prompt.end_noise_idx,
-                                        noise_scale,                                            # noise scale : (1 x length) var of noise, based on predicted prob of next token at the preceding position
+                                        #noise_scale,                                            # noise scale : (1 x length) var of noise, based on predicted prob of next token at the preceding position
                                         num_copies = self.num_copies,
                                         noise_level = self.noise_level,                         # noise_level : (int) var of iid noise
                                         max_new_tokens=prompt.max_new_tokens)                   # bottleneck    # logits : batch size x max length x vocab size
@@ -476,7 +476,6 @@ class SmoothLLMHydraForward(Defense):
                 raise ValueError("LLM did not generate any outputs.")
             
             majority_output_list.append( answer_choice_list[random.choice(majority_output)] )
-            
         return majority_output_list                                 # list of index of choice (ex) [3,3,0,1, ...])
     
     
@@ -490,6 +489,84 @@ class SmoothLLMHydraForward(Defense):
             ret += k * shifted_seq
         return ret
 
+
+    def _get_answer_choice_logits(self, logits, answer_choice_list = ['A', 'B', 'C', 'D']):
+        batch_size = len(logits)
+        letter_tokens = [self.target_model.tokenizer.encode(letter)[1] for letter in answer_choice_list]        # [0] : bos
+        answer_choice_logits = torch.zeros( (batch_size, len(answer_choice_list)), dtype=torch.float16)         # batch size x answer choices
+        
+        for i in range(batch_size):
+            answer_choice_logits[i,:] = torch.tensor([logits[i][-1,token_idx] for token_idx in letter_tokens],dtype=torch.float16)
+        
+        return answer_choice_logits
+    
+    def _get_most_likely_answers(self, logits, answer_choice_list):                                             # logits : batch size x answer choices
+        # assume logits have a unique maximizer on each row
+        answer_counts = torch.sum( logits == torch.max(logits, dim=-1, keepdim=True).values, dim=0 )            # answer_counts : (answer choices,)
+        max_count_positions = (answer_counts == torch.max( answer_counts ))
+        candidates = torch.LongTensor(range(len(answer_choice_list)))[max_count_positions]
+        return candidates
+
+
+
+class SmoothLLMHydraForwardLight(Defense):
+    def __init__(self, target_model, perturbation, num_copies, noise_level):
+        super(SmoothLLMHydraForwardLight, self).__init__(target_model)
+        
+        self.num_copies = num_copies
+        self.perturbation_fn = perturbation
+        self.noise_level = noise_level
+
+    @torch.no_grad()
+    def __call__(self, batch_prompt, forward_batch_size=4, max_new_len=100, answer_choice_list = ['A', 'B', 'C', 'D']):
+        # batch_prompt : list of <Prompt>s              
+        answer_token_ids = self._get_answer_choice_ids(answer_choice_list)
+        
+        # Iterate each batch of inputs
+        all_outputs = []
+        for i,prompt in enumerate(batch_prompt):
+            tokenized_input = self.target_model.tokenizer(
+            prompt.full_prompt, 
+            padding=True, 
+            truncation=False, 
+            return_tensors='pt'
+            )
+            # Run a forward pass through the LLM for each perturbed copy    
+            answer_logits = self.target_model(tokenized_input,
+                                        prompt.start_noise_idx,
+                                        prompt.end_noise_idx,
+                                        num_copies = self.num_copies,
+                                        noise_level = self.noise_level,                         # noise_level : (int) var of iid noise
+                                        answer_token_ids = answer_token_ids,
+                                        forward_batch_size=forward_batch_size)                   # bottleneck    # answer_logits : num_copies x (# answer choices)
+            all_outputs.append(answer_logits)     # feed in 1 prompt, get num_copies outputs
+            torch.cuda.empty_cache()
+        
+        majority_output_list = []
+        for answer_logits in all_outputs:                                 # outputs : outputs from a single prompt;   list of tensors
+            majority_output = self._get_most_likely_answers(answer_logits, answer_choice_list)
+            
+            if len(majority_output) == 0:
+                raise ValueError("LLM did not generate any outputs.")
+            
+            majority_output_list.append( answer_choice_list[random.choice(majority_output)] )
+        return majority_output_list                                 # list of index of choice (ex) [3,3,0,1, ...])
+    
+    
+    def moving_average(self, seq, multiplier):
+        # seq : 1 dim Tensor
+        assert sum(multiplier) == 1
+        ret = torch.zeros_like(seq, dtype=torch.float)
+        for offset, k in enumerate(multiplier[::-1]):
+            shifted_seq = torch.roll(seq, offset, dims=-1)
+            shifted_seq[:offset] = 0
+            ret += k * shifted_seq
+        return ret
+
+
+    def _get_answer_choice_ids(self, answer_choice_list = ['A', 'B', 'C', 'D']):
+        letter_tokens = [self.target_model.tokenizer.encode(letter)[1] for letter in answer_choice_list]        # [0] : bos
+        return letter_tokens
 
     def _get_answer_choice_logits(self, logits, answer_choice_list = ['A', 'B', 'C', 'D']):
         batch_size = len(logits)
